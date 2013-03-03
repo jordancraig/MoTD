@@ -1,6 +1,5 @@
 package me.jordan.craig.motd;
 
-
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -9,16 +8,25 @@ import java.util.HashMap;
 import javax.xml.parsers.SAXParser;
 import javax.xml.parsers.SAXParserFactory;
 
-import me.jordan.craig.utils.EfficientAdapter;
-import me.jordan.craig.utils.Post;
+import android.widget.*;
+import me.jordan.craig.models.Post;
+import me.jordan.craig.utils.Utils;
 
+import org.lucasr.smoothie.AsyncListView;
+import org.lucasr.smoothie.ItemLoader;
+import org.lucasr.smoothie.ItemManager;
 import org.xml.sax.Attributes;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 import org.xml.sax.XMLReader;
 import org.xml.sax.helpers.DefaultHandler;
 
+import uk.co.senab.bitmapcache.BitmapLruCache;
+import uk.co.senab.bitmapcache.CacheableBitmapDrawable;
+import uk.co.senab.bitmapcache.CacheableImageView;
+
 import android.app.ProgressDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -27,39 +35,130 @@ import android.support.v4.app.Fragment;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
-import android.widget.ListView;
 
+/**
+ * News Feed
+ * @author kennydude
+ *
+ */
 public class ContentFragment extends Fragment {
-	
 	private View FragmentView;
-	private ListView news_feed;
-	private ProgressDialog ShowProgress;
-	public ArrayList<Post> PostList = new ArrayList<Post>();
+	
+	private AsyncListView news_feed;
+	private ProgressBar ShowProgress;
+	public PostAdapter postAdapter;
 	
 	public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
 		FragmentView = inflater.inflate(R.layout.content_layout, container, false);
-		news_feed = (ListView) FragmentView.findViewById(R.id.listView1);
+		news_feed = (AsyncListView) FragmentView.findViewById(R.id.list);
 		return FragmentView;
 	}
 	
 	public void onActivityCreated(Bundle savedInstanceState) {
 		super.onActivityCreated(savedInstanceState);
-		ShowProgress = ProgressDialog.show(getActivity(),"", "Loading... Please wait.", true);
-		new loadingTask().execute("http://www.marchofthedroids.co.uk/feed/");
+		
+		// Set Smooth Loader stuff up
+		ItemManager.Builder builder = new ItemManager.Builder(
+				new PostItemManager(App.getInstance(getActivity()).getBitmapCache())
+		);
+        builder.setPreloadItemsEnabled(true).setPreloadItemsCount(5);
+        builder.setThreadPoolSize(4);
+		news_feed.setItemManager(builder.build());
+		
+		// Set adapter
+		postAdapter = new PostAdapter(getActivity());
+		news_feed.setAdapter(postAdapter);
+		
+		// Show load dialog
+		ShowProgress = (ProgressBar) getView().findViewById(R.id.progress);
+		ShowProgress.setVisibility(View.VISIBLE);
+		
+		new LoadFeedTask().execute("http://www.marchofthedroids.co.uk/feed/");
 		news_feed.setOnItemClickListener(new OnItemClickListener() {
 			public void onItemClick(AdapterView<?> parent, View view,
 					int position, long id) {
-				Intent intent = new Intent(Intent.ACTION_VIEW).setData(Uri.parse(PostList.get(position).getUrl()));
+				Intent intent = new Intent(Intent.ACTION_VIEW).setData(Uri.parse(postAdapter.getItem(position).getUrl()));
 				startActivity(intent);
-
 			}
 		});
 	}
 	
-	class loadingTask extends AsyncTask<String, Void, String> {
+	public static class ViewHolder{
+		public ViewHolder(View master){
+			title = (TextView) master.findViewById(R.id.title);
+			description = (TextView) master.findViewById(R.id.details);
+			thumbnail = (CacheableImageView) master.findViewById(R.id.thumb);
+		}
+		
+		public TextView title, description;
+		public CacheableImageView thumbnail;
+	}
+	
+	public class PostItemManager extends ItemLoader<String, CacheableBitmapDrawable> {
+		public PostItemManager(BitmapLruCache mCache){
+			this.mCache = mCache;
+		}
+		BitmapLruCache mCache;
 
+		@Override
+		public void displayItem(View itemView, CacheableBitmapDrawable result,
+				boolean from_memory) {
+			ViewHolder holder = (ViewHolder) itemView.getTag();
+			if(result != null){
+				holder.thumbnail.setImageDrawable(result);
+			}
+		}
+
+		@Override
+		public String getItemParams(Adapter adapter, int pos) {
+			return ((Post)adapter.getItem(pos)).getThumbnail();
+		}
+
+		@Override
+		public CacheableBitmapDrawable loadItem(String url) {
+			CacheableBitmapDrawable wrapper = mCache.get(url);
+	        if (wrapper == null) {
+	            wrapper = mCache.put(url, Utils.loadImage(url));
+	        }
+
+	        return wrapper;
+		}
+
+		@Override
+		public CacheableBitmapDrawable loadItemFromMemory(String url) {
+			return mCache.getFromMemoryCache(url);
+		}
+
+	}
+	
+	public class PostAdapter extends ArrayAdapter<Post>{
+		public PostAdapter(Context context) {
+			super(context, -1);
+		}
+		
+		@Override
+		public View getView( int pos, View convertView, ViewGroup parent ){
+			Post post = getItem(pos);
+			ViewHolder holder;
+			
+			if(convertView == null){
+				convertView = LayoutInflater.from(getContext()).inflate(R.layout.post_layout, null);
+				holder = new ViewHolder(convertView);
+				
+				convertView.setTag(holder);
+			} else{
+				holder = (ViewHolder) convertView.getTag();
+			}
+			
+			holder.title.setText(post.getTitle());
+			holder.description.setText(post.getPubDate());
+			
+			return convertView;
+		}
+	}
+	
+	class LoadFeedTask extends AsyncTask<String, Void, String> {
 		protected String doInBackground(String... urls) {
 
 			SAXHelper sh = null;
@@ -74,9 +173,8 @@ public class ContentFragment extends Fragment {
 		}
 
 		protected void onPostExecute(String s) {
-			news_feed.setAdapter(new EfficientAdapter(getActivity(), PostList));
-			ShowProgress.dismiss();
-
+			postAdapter.notifyDataSetInvalidated();
+			ShowProgress.setVisibility(View.GONE);
 		}
 	}
 	
@@ -144,7 +242,12 @@ public class ContentFragment extends Fragment {
 			}
 
 			if (localName.equalsIgnoreCase("item")) {
-				PostList.add(currentPost);
+				getActivity().runOnUiThread(new Runnable() {
+					@Override
+					public void run() {
+						postAdapter.add(currentPost);
+					}
+				});
 				currentPost = new Post();
 			}
 
